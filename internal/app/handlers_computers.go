@@ -3,7 +3,7 @@ package app
 import "net/http"
 
 func (a *App) listComputers(w http.ResponseWriter, _ *http.Request) {
-	rows, err := a.db.Query(`SELECT Id, Name, IsOccupied FROM Computers ORDER BY Id`)
+	rows, err := a.db.Query(`SELECT Id, Name, COALESCE(Zone, 'standard'), COALESCE(X, 0), COALESCE(Y, 0), IsOccupied, COALESCE(HourPrice, 120) FROM Computers ORDER BY Id`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -13,7 +13,7 @@ func (a *App) listComputers(w http.ResponseWriter, _ *http.Request) {
 	computers := make([]Computer, 0)
 	for rows.Next() {
 		var computer Computer
-		if err := rows.Scan(&computer.ID, &computer.Name, &computer.IsOccupied); err != nil {
+		if err := rows.Scan(&computer.ID, &computer.Name, &computer.Zone, &computer.X, &computer.Y, &computer.IsOccupied, &computer.HourPrice); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -34,8 +34,12 @@ func (a *App) createComputer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	normalizeComputer(&computer)
 
-	result, err := a.db.Exec(`INSERT INTO Computers (Name, IsOccupied) VALUES (?, ?)`, computer.Name, computer.IsOccupied)
+	result, err := a.db.Exec(
+		`INSERT INTO Computers (Name, Zone, X, Y, IsOccupied, HourPrice) VALUES (?, ?, ?, ?, ?, ?)`,
+		computer.Name, computer.Zone, computer.X, computer.Y, computer.IsOccupied, computer.HourPrice,
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -62,8 +66,12 @@ func (a *App) updateComputer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	normalizeComputer(&computer)
 
-	result, err := a.db.Exec(`UPDATE Computers SET Name = ?, IsOccupied = ? WHERE Id = ?`, computer.Name, computer.IsOccupied, id)
+	result, err := a.db.Exec(
+		`UPDATE Computers SET Name = ?, Zone = ?, X = ?, Y = ?, IsOccupied = ?, HourPrice = ? WHERE Id = ?`,
+		computer.Name, computer.Zone, computer.X, computer.Y, computer.IsOccupied, computer.HourPrice, id,
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -103,4 +111,13 @@ func computerStatus(isOccupied bool) string {
 		return "Занят"
 	}
 	return "Свободен"
+}
+
+func normalizeComputer(computer *Computer) {
+	if computer.Zone == "" {
+		computer.Zone = "standard"
+	}
+	if computer.HourPrice <= 0 {
+		computer.HourPrice = 120
+	}
 }

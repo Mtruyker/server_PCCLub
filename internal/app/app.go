@@ -49,15 +49,21 @@ func (a *App) Routes() http.Handler {
 	mux := NewRouter()
 
 	mux.HandleFunc("GET /health", a.health)
+	mux.HandleFunc("POST /api/auth/register", a.register)
+	mux.HandleFunc("POST /api/auth/login", a.login)
+
 	mux.HandleFunc("GET /api/clients", a.listClients)
 	mux.HandleFunc("POST /api/clients", a.createClient)
+	mux.HandleFunc("GET /api/clients/{id}", a.getClient)
 	mux.HandleFunc("PUT /api/clients/{id}", a.updateClient)
 	mux.HandleFunc("DELETE /api/clients/{id}", a.deleteClient)
+	mux.HandleFunc("POST /api/clients/{id}/top-up", a.topUpClient)
 
 	mux.HandleFunc("GET /api/computers", a.listComputers)
 	mux.HandleFunc("POST /api/computers", a.createComputer)
 	mux.HandleFunc("PUT /api/computers/{id}", a.updateComputer)
 	mux.HandleFunc("DELETE /api/computers/{id}", a.deleteComputer)
+	mux.HandleFunc("GET /api/pcs", a.listComputers)
 
 	mux.HandleFunc("GET /api/tariffs", a.listTariffs)
 	mux.HandleFunc("POST /api/tariffs", a.createTariff)
@@ -74,6 +80,10 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/items", a.listItems)
 	mux.HandleFunc("GET /api/pcs/available", a.listAvailableComputers)
 	mux.HandleFunc("POST /api/bookings", a.createBooking)
+	mux.HandleFunc("GET /api/clients/{id}/bookings", a.listClientBookings)
+	mux.HandleFunc("DELETE /api/bookings/{id}", a.cancelBooking)
+	mux.HandleFunc("POST /api/orders", a.createOrder)
+	mux.HandleFunc("GET /api/clients/{id}/orders", a.listClientOrders)
 
 	mux.HandleFunc("GET /api/statistics", a.statistics)
 

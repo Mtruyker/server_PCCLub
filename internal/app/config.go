@@ -6,6 +6,7 @@ type Config struct {
 	Port         string
 	DatabasePath string
 	SeedDemoData bool
+	JWTSecret    string
 }
 
 func ConfigFromEnv() Config {
@@ -19,9 +20,15 @@ func ConfigFromEnv() Config {
 		dbPath = "data/pcclub.db"
 	}
 
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "pcclub-local-dev-secret"
+	}
+
 	return Config{
 		Port:         port,
 		DatabasePath: dbPath,
 		SeedDemoData: os.Getenv("SEED_DEMO_DATA") != "false",
+		JWTSecret:    jwtSecret,
 	}
 }

@@ -11,10 +11,14 @@ type Client struct {
 }
 
 type Computer struct {
-	ID         int64  `json:"id"`
-	Name       string `json:"name"`
-	IsOccupied bool   `json:"isOccupied"`
-	Status     string `json:"status"`
+	ID         int64   `json:"id"`
+	Name       string  `json:"name"`
+	Zone       string  `json:"zone"`
+	X          int     `json:"x"`
+	Y          int     `json:"y"`
+	IsOccupied bool    `json:"isOccupied"`
+	Status     string  `json:"status"`
+	HourPrice  float64 `json:"hourPrice"`
 }
 
 type Tariff struct {
@@ -26,7 +30,9 @@ type Tariff struct {
 
 type Session struct {
 	ID           int64      `json:"id"`
+	ClientID     int64      `json:"clientId,omitempty"`
 	ClientName   string     `json:"clientName"`
+	PCID         int64      `json:"pcId,omitempty"`
 	ComputerName string     `json:"computerName"`
 	StartTime    time.Time  `json:"startTime"`
 	EndTime      *time.Time `json:"endTime"`

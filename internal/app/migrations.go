@@ -32,6 +32,29 @@ func (a *App) migrate() error {
 			TariffName TEXT NULL,
 			HourlyRate REAL NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS News (
+			Id INTEGER PRIMARY KEY AUTOINCREMENT,
+			Title TEXT NOT NULL,
+			Content TEXT NOT NULL,
+			PublishedAt TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS Items (
+			Id INTEGER PRIMARY KEY AUTOINCREMENT,
+			Name TEXT NOT NULL,
+			Category TEXT NOT NULL,
+			Price REAL NOT NULL,
+			Description TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS Bookings (
+			Id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ClientName TEXT NOT NULL,
+			ComputerName TEXT NOT NULL,
+			StartTime TEXT NOT NULL,
+			EndTime TEXT NULL,
+			TariffName TEXT,
+			HourlyRate REAL NOT NULL,
+			Status TEXT NOT NULL
+		);`,
 	}
 
 	for _, statement := range statements {

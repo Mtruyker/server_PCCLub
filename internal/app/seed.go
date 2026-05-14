@@ -44,6 +44,27 @@ func (a *App) seedDemoData() error {
 		}
 	}
 
+	news := []NewsItem{
+		{Title: "Открытие новых зон", Content: "Скоро будет открыта ещё одна игровая зона с современными ПК.", PublishedAt: time.Now().Add(-48 * time.Hour).UTC()},
+		{Title: "Акция на аренду", Content: "При бронировании более 3 часов действует скидка 10%.", PublishedAt: time.Now().Add(-24 * time.Hour).UTC()},
+	}
+	for _, item := range news {
+		if _, err := a.db.Exec(`INSERT INTO News (Title, Content, PublishedAt) VALUES (?, ?, ?)`, item.Title, item.Content, item.PublishedAt.Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+	}
+
+	products := []Item{
+		{Name: "Игровая мышь", Category: "Аксессуары", Price: 1250, Description: "Высокоточная мышь для профессионалов."},
+		{Name: "Игровая клавиатура", Category: "Аксессуары", Price: 2100, Description: "Механическая клавиатура с RGB-подсветкой."},
+		{Name: "Наушники", Category: "Аудиотехника", Price: 1750, Description: "Комфортные наушники с шумоподавлением."},
+	}
+	for _, product := range products {
+		if _, err := a.db.Exec(`INSERT INTO Items (Name, Category, Price, Description) VALUES (?, ?, ?, ?)`, product.Name, product.Category, product.Price, product.Description); err != nil {
+			return err
+		}
+	}
+
 	now := time.Now().UTC()
 	if _, err := a.db.Exec(
 		`INSERT INTO Sessions (ClientName, ComputerName, StartTime, EndTime, TotalCost, TariffName, HourlyRate) VALUES (?, ?, ?, ?, ?, ?, ?)`,

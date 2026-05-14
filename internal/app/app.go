@@ -46,7 +46,7 @@ func (a *App) Close() error {
 }
 
 func (a *App) Routes() http.Handler {
-	mux := http.NewServeMux()
+	mux := NewRouter()
 
 	mux.HandleFunc("GET /health", a.health)
 	mux.HandleFunc("GET /api/clients", a.listClients)
@@ -68,6 +68,12 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/sessions", a.startSession)
 	mux.HandleFunc("POST /api/sessions/{id}/complete", a.completeSession)
 	mux.HandleFunc("DELETE /api/sessions/{id}", a.deleteSession)
+	mux.HandleFunc("GET /api/clients/{id}/sessions", a.listClientSessions)
+
+	mux.HandleFunc("GET /api/news", a.listNews)
+	mux.HandleFunc("GET /api/items", a.listItems)
+	mux.HandleFunc("GET /api/pcs/available", a.listAvailableComputers)
+	mux.HandleFunc("POST /api/bookings", a.createBooking)
 
 	mux.HandleFunc("GET /api/statistics", a.statistics)
 

@@ -25,7 +25,7 @@ func decodeJSON(r *http.Request, target any) error {
 }
 
 func pathID(r *http.Request) (int64, error) {
-	raw := r.PathValue("id")
+	raw := pathValue(r, "id")
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
 		return 0, errors.New("invalid id")

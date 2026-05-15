@@ -1,12 +1,16 @@
 package app
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 type Config struct {
 	Port         string
 	DatabasePath string
 	SeedDemoData bool
 	JWTSecret    string
+	AdminToken   string
 }
 
 func ConfigFromEnv() Config {
@@ -25,10 +29,21 @@ func ConfigFromEnv() Config {
 		jwtSecret = "pcclub-local-dev-secret"
 	}
 
+	adminToken := strings.TrimSpace(os.Getenv("ADMIN_API_TOKEN"))
+	if adminToken == "" {
+		adminToken = strings.TrimSpace(os.Getenv("PCCLUB_API_TOKEN"))
+	}
+	if adminToken == "" {
+		if raw, err := os.ReadFile("api-token.txt"); err == nil {
+			adminToken = strings.TrimSpace(string(raw))
+		}
+	}
+
 	return Config{
 		Port:         port,
 		DatabasePath: dbPath,
 		SeedDemoData: os.Getenv("SEED_DEMO_DATA") != "false",
 		JWTSecret:    jwtSecret,
+		AdminToken:   adminToken,
 	}
 }

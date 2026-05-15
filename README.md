@@ -18,9 +18,12 @@ PORT=8080
 DATABASE_PATH=data/pcclub.db
 SEED_DEMO_DATA=true
 JWT_SECRET=change-me
+ADMIN_API_TOKEN=admin-token
 ```
 
 `JWT_SECRET` используется для подписи access/refresh токенов. Для production обязательно задай свое значение.
+
+`ADMIN_API_TOKEN` - статический токен администратора для desktop/admin приложения. Для совместимости сервер также понимает `PCCLUB_API_TOKEN`; если обе переменные не заданы, он попробует прочитать токен из файла `api-token.txt` в рабочей папке.
 
 Если демо-данные не нужны:
 
@@ -38,6 +41,7 @@ SEED_DEMO_DATA=false
 ```text
 DATABASE_PATH=/app/data/pcclub.db
 JWT_SECRET=<strong-secret>
+ADMIN_API_TOKEN=<admin-token>
 ```
 
 ## Авторизация
@@ -46,6 +50,18 @@ JWT_SECRET=<strong-secret>
 
 ```http
 Authorization: Bearer <token>
+```
+
+Административное приложение может передавать статический токен так:
+
+```http
+Authorization: Bearer <admin-token>
+```
+
+или так:
+
+```http
+X-API-Token: <admin-token>
 ```
 
 ### Регистрация

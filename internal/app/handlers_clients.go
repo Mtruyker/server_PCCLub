@@ -94,11 +94,22 @@ func (a *App) updateClient(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := a.requireClient(r, id); err != nil {
+
+	isAdmin, err := a.requireClientOrAdmin(r, id)
+	if err != nil {
 		writeAuthError(w, err)
 		return
 	}
 
+	if isAdmin {
+		a.updateClientAsAdmin(w, r, id)
+		return
+	}
+
+	a.updateClientProfile(w, r, id)
+}
+
+func (a *App) updateClientProfile(w http.ResponseWriter, r *http.Request, id int64) {
 	var request ClientProfileRequest
 	if err := decodeJSON(r, &request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json")
@@ -141,13 +152,52 @@ func (a *App) updateClient(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, client)
 }
 
+func (a *App) updateClientAsAdmin(w http.ResponseWriter, r *http.Request, id int64) {
+	var client Client
+	if err := decodeJSON(r, &client); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	client.Name = strings.TrimSpace(client.Name)
+	client.Phone = strings.TrimSpace(client.Phone)
+	client.Email = strings.TrimSpace(client.Email)
+	if err := requireText(client.Name, "name"); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result, err := a.db.Exec(
+		`UPDATE Clients SET Name = ?, Phone = ?, Email = ?, Balance = ? WHERE Id = ?`,
+		client.Name, client.Phone, client.Email, client.Balance, id,
+	)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			writeError(w, http.StatusConflict, "phone already registered")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		writeError(w, http.StatusNotFound, "client not found")
+		return
+	}
+
+	client, err = a.findClientByID(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, client)
+}
+
 func (a *App) topUpClient(w http.ResponseWriter, r *http.Request) {
 	id, err := pathID(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := a.requireClient(r, id); err != nil {
+	if _, err := a.requireClientOrAdmin(r, id); err != nil {
 		writeAuthError(w, err)
 		return
 	}

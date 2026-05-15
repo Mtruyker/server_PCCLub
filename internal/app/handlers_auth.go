@@ -3,6 +3,7 @@ package app
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -220,6 +221,32 @@ func (a *App) requireClient(r *http.Request, expectedClientID int64) error {
 		return authError{status: http.StatusForbidden, message: "access denied"}
 	}
 	return nil
+}
+
+func (a *App) requireClientOrAdmin(r *http.Request, expectedClientID int64) (bool, error) {
+	if a.isAdminRequest(r) {
+		return true, nil
+	}
+	return false, a.requireClient(r, expectedClientID)
+}
+
+func (a *App) isAdminRequest(r *http.Request) bool {
+	if a.cfg.AdminToken == "" {
+		return false
+	}
+
+	token := strings.TrimSpace(r.Header.Get("X-API-Token"))
+	if token == "" {
+		authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+		if strings.HasPrefix(authorization, "Bearer ") {
+			token = strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
+		}
+	}
+	if token == "" {
+		return false
+	}
+
+	return subtle.ConstantTimeCompare([]byte(token), []byte(a.cfg.AdminToken)) == 1
 }
 
 func writeAuthError(w http.ResponseWriter, err error) {

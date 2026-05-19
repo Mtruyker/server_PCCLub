@@ -86,6 +86,12 @@ func (a *App) migrate() error {
 			Quantity INTEGER NOT NULL,
 			Price REAL NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS OrderStatusHistory (
+			Id INTEGER PRIMARY KEY AUTOINCREMENT,
+			OrderId INTEGER NOT NULL,
+			Status TEXT NOT NULL,
+			ChangedAt TEXT NOT NULL
+		);`,
 	}
 
 	for _, statement := range statements {
@@ -121,9 +127,11 @@ func (a *App) migrate() error {
 
 	indexes := []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_phone ON Clients(Phone) WHERE Phone IS NOT NULL AND Phone <> '';`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_clients_email ON Clients(Email) WHERE Email IS NOT NULL AND Email <> '';`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_computers_name ON Computers(Name);`,
 		`CREATE INDEX IF NOT EXISTS idx_bookings_pc_time ON Bookings(PcId, StartTime, Status);`,
 		`CREATE INDEX IF NOT EXISTS idx_orders_client ON Orders(ClientId);`,
+		`CREATE INDEX IF NOT EXISTS idx_order_status_history_order ON OrderStatusHistory(OrderId);`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_client ON Sessions(ClientId);`,
 	}
 	for _, statement := range indexes {

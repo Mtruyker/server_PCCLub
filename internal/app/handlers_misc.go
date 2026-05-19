@@ -215,60 +215,90 @@ func (a *App) listAvailableComputers(w http.ResponseWriter, _ *http.Request) {
 func (a *App) createBooking(w http.ResponseWriter, r *http.Request) {
 	var request BookingRequest
 	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_JSON", "Некорректный JSON")
 		return
 	}
 	if request.PCName == "" {
 		request.PCName = request.ComputerName
 	}
 	if err := validateBookingRequest(request); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeValidationError(w, err)
 		return
 	}
-	if err := a.requireClient(r, request.ClientID); err != nil {
+
+	clientID, _, err := a.clientIDFromRequest(r, request.ClientID)
+	if err != nil {
 		writeAuthError(w, err)
 		return
 	}
-
-	client, err := a.findClientByID(request.ClientID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			writeError(w, http.StatusNotFound, "client not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	pcID, hourPrice, err := a.findPCForBooking(request.PCName)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			writeError(w, http.StatusNotFound, "pc not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	request.ClientID = clientID
 
 	startTime, err := time.Parse(time.RFC3339Nano, request.StartTime)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid startTime format, expected RFC3339")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_START_TIME", "Некорректный формат startTime, нужен RFC3339")
+		return
+	}
+	if startTime.Before(time.Now().UTC().Add(-5 * time.Minute)) {
+		writeErrorCode(w, http.StatusBadRequest, "BOOKING_IN_PAST", "Нельзя создать бронь в прошлом")
 		return
 	}
 	endTime := startTime.Add(time.Duration(request.Duration) * time.Hour)
-	if err := a.ensureBookingSlotAvailable(pcID, request.PCName, startTime, endTime); err != nil {
-		writeError(w, http.StatusConflict, err.Error())
+
+	tx, err := a.db.Begin()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer tx.Rollback()
+
+	if err := expireOldBookingsTx(tx, time.Now().UTC()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var clientName string
+	if err := tx.QueryRow(`SELECT Name FROM Clients WHERE Id = ?`, request.ClientID).Scan(&clientName); err != nil {
+		if err == sql.ErrNoRows {
+			writeErrorCode(w, http.StatusNotFound, "CLIENT_NOT_FOUND", "Клиент не найден")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var pcID int64
+	var hourPrice float64
+	var isOccupied bool
+	if err := tx.QueryRow(`SELECT Id, COALESCE(HourPrice, 120), IsOccupied FROM Computers WHERE Name = ?`, request.PCName).Scan(&pcID, &hourPrice, &isOccupied); err != nil {
+		if err == sql.ErrNoRows {
+			writeErrorCode(w, http.StatusNotFound, "PC_NOT_FOUND", "ПК не найден")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if isOccupied {
+		writeErrorCode(w, http.StatusConflict, "PC_UNAVAILABLE", "ПК сейчас занят")
+		return
+	}
+
+	if err := ensureBookingSlotAvailableTx(tx, pcID, request.PCName, startTime, endTime); err != nil {
+		writeErrorCode(w, http.StatusConflict, "BOOKING_CONFLICT", err.Error())
 		return
 	}
 
 	totalPrice := hourPrice * float64(request.Duration)
-	result, err := a.db.Exec(`INSERT INTO Bookings
+	result, err := tx.Exec(`INSERT INTO Bookings
 		(ClientId, ClientName, PcId, ComputerName, StartTime, EndTime, TariffName, HourlyRate, DurationHours, TotalPrice, Status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		request.ClientID, client.Name, pcID, request.PCName, startTime.Format(time.RFC3339Nano), endTime.Format(time.RFC3339Nano),
+		request.ClientID, clientName, pcID, request.PCName, startTime.Format(time.RFC3339Nano), endTime.Format(time.RFC3339Nano),
 		"", hourPrice, request.Duration, totalPrice, "active",
 	)
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -293,6 +323,10 @@ func (a *App) listClientBookings(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.requireClient(r, id); err != nil {
 		writeAuthError(w, err)
+		return
+	}
+	if err := a.expireOldBookings(time.Now().UTC()); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -365,7 +399,7 @@ func (a *App) cancelBooking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := a.db.Exec(`UPDATE Bookings SET Status = 'cancelled' WHERE Id = ?`, id); err != nil {
+	if _, err := a.db.Exec(`UPDATE Bookings SET Status = 'cancelled' WHERE Id = ? AND Status = 'active'`, id); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -375,23 +409,25 @@ func (a *App) cancelBooking(w http.ResponseWriter, r *http.Request) {
 func (a *App) createOrder(w http.ResponseWriter, r *http.Request) {
 	var request OrderRequest
 	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_JSON", "Некорректный JSON")
 		return
 	}
 	if err := validateOrderRequest(request); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeValidationError(w, err)
 		return
 	}
-	if err := a.requireClient(r, request.ClientID); err != nil {
+	clientID, _, err := a.clientIDFromRequest(r, request.ClientID)
+	if err != nil {
 		writeAuthError(w, err)
 		return
 	}
+	request.ClientID = clientID
 
 	orderDate := time.Now().UTC()
 	if request.Date != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, request.Date)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid date format, expected RFC3339")
+			writeErrorCode(w, http.StatusBadRequest, "INVALID_DATE", "Некорректный формат date, нужен RFC3339")
 			return
 		}
 		orderDate = parsed
@@ -411,7 +447,7 @@ func (a *App) createOrder(w http.ResponseWriter, r *http.Request) {
 		var price float64
 		err := tx.QueryRow(`SELECT Name, Price FROM Items WHERE Id = ?`, requestedItem.ProductID).Scan(&name, &price)
 		if err == sql.ErrNoRows {
-			writeError(w, http.StatusNotFound, "product not found")
+			writeErrorCode(w, http.StatusNotFound, "PRODUCT_NOT_FOUND", "Товар не найден")
 			return
 		}
 		if err != nil {
@@ -427,12 +463,17 @@ func (a *App) createOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := tx.Exec(`INSERT INTO Orders (ClientId, Date, TotalAmount, Status) VALUES (?, ?, ?, ?)`,
-		request.ClientID, orderDate.Format(time.RFC3339Nano), totalAmount, "pending")
+		request.ClientID, orderDate.Format(time.RFC3339Nano), totalAmount, "new")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	orderID, _ := result.LastInsertId()
+	if _, err := tx.Exec(`INSERT INTO OrderStatusHistory (OrderId, Status, ChangedAt) VALUES (?, ?, ?)`,
+		orderID, "new", orderDate.Format(time.RFC3339Nano)); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	for i, requestedItem := range request.Items {
 		item := items[i]
@@ -454,7 +495,7 @@ func (a *App) createOrder(w http.ResponseWriter, r *http.Request) {
 		Date:        orderDate,
 		Items:       items,
 		TotalAmount: totalAmount,
-		Status:      "pending",
+		Status:      "new",
 	})
 }
 
@@ -535,9 +576,18 @@ func (a *App) findPCForBooking(pcName string) (int64, float64, error) {
 }
 
 func (a *App) ensureBookingSlotAvailable(pcID int64, pcName string, startTime, endTime time.Time) error {
-	rows, err := a.db.Query(`SELECT StartTime, EndTime, COALESCE(DurationHours, 0)
+	return ensureBookingSlotAvailableTx(a.db, pcID, pcName, startTime, endTime)
+}
+
+type sqlQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func ensureBookingSlotAvailableTx(q sqlQueryer, pcID int64, pcName string, startTime, endTime time.Time) error {
+	rows, err := q.Query(`SELECT StartTime, EndTime, COALESCE(DurationHours, 0)
 		FROM Bookings
-		WHERE (PcId = ? OR (PcId IS NULL AND ComputerName = ?)) AND Status IN ('active', 'booked', 'pending')`, pcID, pcName)
+		WHERE (PcId = ? OR (PcId IS NULL AND ComputerName = ?)) AND Status IN ('active', 'booked')`, pcID, pcName)
 	if err != nil {
 		return err
 	}
@@ -563,41 +613,56 @@ func (a *App) ensureBookingSlotAvailable(pcID int64, pcName string, startTime, e
 			existingEnd = parsedEnd
 		}
 		if startTime.Before(existingEnd) && endTime.After(existingStart) {
-			return errBadRequest("pc is already booked for this time")
+			return errCode("BOOKING_CONFLICT", "ПК уже забронирован на это время")
 		}
 	}
 	return rows.Err()
 }
 
+func (a *App) expireOldBookings(now time.Time) error {
+	return expireOldBookingsTx(a.db, now)
+}
+
+func expireOldBookingsTx(q sqlQueryer, now time.Time) error {
+	_, err := q.Exec(`UPDATE Bookings SET Status = 'expired' WHERE Status = 'active' AND EndTime IS NOT NULL AND EndTime < ?`, now.Format(time.RFC3339Nano))
+	return err
+}
+
 func validateBookingRequest(request BookingRequest) error {
 	if request.ClientID <= 0 {
-		return errBadRequest("clientId is required")
+		return errCode("CLIENT_ID_REQUIRED", "clientId обязателен")
 	}
 	if err := requireText(request.PCName, "pcName"); err != nil {
-		return err
+		return errCode("PC_NAME_REQUIRED", "pcName обязателен")
 	}
 	if err := requireText(request.StartTime, "startTime"); err != nil {
-		return err
+		return errCode("START_TIME_REQUIRED", "startTime обязателен")
 	}
 	if request.Duration <= 0 {
-		return errBadRequest("duration must be greater than zero")
+		return errCode("INVALID_DURATION", "duration должен быть больше нуля")
+	}
+	if request.Duration > 24 {
+		return errCode("INVALID_DURATION", "duration не должен быть больше 24 часов")
 	}
 	return nil
 }
 
 func validateOrderRequest(request OrderRequest) error {
 	if request.ClientID <= 0 {
-		return errBadRequest("clientId is required")
+		return errCode("CLIENT_ID_REQUIRED", "clientId обязателен")
 	}
 	if len(request.Items) == 0 {
-		return errBadRequest("items are required")
+		return errCode("ITEMS_REQUIRED", "items обязателен")
 	}
 	for _, item := range request.Items {
 		if item.ProductID <= 0 {
-			return errBadRequest("productId is required")
+			return errCode("PRODUCT_ID_REQUIRED", "productId обязателен")
 		}
 		if item.Quantity <= 0 {
-			return errBadRequest("quantity must be greater than zero")
+			return errCode("INVALID_QUANTITY", "quantity должен быть больше нуля")
+		}
+		if item.Quantity > 99 {
+			return errCode("INVALID_QUANTITY", "quantity не должен быть больше 99")
 		}
 	}
 	return nil

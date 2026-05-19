@@ -106,6 +106,17 @@ Content-Type: application/json
 
 Пароль хранится только как bcrypt hash и не возвращается в API.
 
+Для `/api/auth/register` и `/api/auth/login` действует простой rate limit по IP, чтобы снизить риск перебора паролей.
+
+Ошибки возвращаются в едином формате:
+
+```json
+{
+  "message": "Телефон уже зарегистрирован",
+  "code": "PHONE_EXISTS"
+}
+```
+
 ## Клиенты
 
 Публичные административные методы:
@@ -219,7 +230,7 @@ DELETE /api/bookings/{id}
 {
   "clientId": 5,
   "pcName": "ПК-01",
-  "startTime": "2026-05-14T19:30:00.000Z",
+  "startTime": "2026-05-20T19:30:00.000Z",
   "duration": 2
 }
 ```
@@ -231,14 +242,16 @@ DELETE /api/bookings/{id}
   "id": 12,
   "clientId": 5,
   "pcName": "ПК-01",
-  "startTime": "2026-05-14T19:30:00.000Z",
+  "startTime": "2026-05-20T19:30:00.000Z",
   "durationHours": 2,
   "totalPrice": 240,
   "status": "active"
 }
 ```
 
-Сервер проверяет пересечения по времени. Если тот же ПК уже забронирован на пересекающийся интервал, вернется `409 Conflict`.
+Сервер сверяет `clientId` с JWT, считает стоимость сам по `hourPrice`, создает бронь в транзакции и проверяет пересечения по времени. Если тот же ПК уже забронирован на пересекающийся интервал, вернется `409 Conflict`.
+
+Статусы брони: `active`, `cancelled`, `completed`, `expired`. Старые активные брони с прошедшим `EndTime` автоматически переводятся в `expired` при работе с бронями.
 
 ## Каталог
 
@@ -279,7 +292,7 @@ GET /api/clients/{id}/orders
       "quantity": 2
     }
   ],
-  "date": "2026-05-14T19:30:00.000Z"
+  "date": "2026-05-20T19:30:00.000Z"
 }
 ```
 
@@ -289,7 +302,7 @@ GET /api/clients/{id}/orders
 {
   "id": 501,
   "clientId": 5,
-  "date": "2026-05-14T19:30:00.000Z",
+  "date": "2026-05-20T19:30:00.000Z",
   "items": [
     {
       "productName": "Coca-Cola 0.5",
@@ -298,11 +311,11 @@ GET /api/clients/{id}/orders
     }
   ],
   "totalAmount": 180,
-  "status": "pending"
+  "status": "new"
 }
 ```
 
-Поддерживаемые статусы в модели: `pending`, `preparing`, `delivering`, `delivered`, `cancelled`. Новые заказы создаются со статусом `pending`.
+Сервер сверяет `clientId` с JWT, проверяет наличие товара и всегда берет актуальную цену из БД. Поддерживаемые статусы в модели: `new`, `paid`, `preparing`, `done`, `cancelled`. Новые заказы создаются со статусом `new`; начальный статус записывается в `OrderStatusHistory`.
 
 ## Игровые Сессии
 
@@ -389,6 +402,7 @@ News(Id, Title, Content, ImageUrl, PublishedAt)
 Bookings(Id, ClientId, ClientName, PcId, ComputerName, StartTime, EndTime, TariffName, HourlyRate, DurationHours, TotalPrice, Status)
 Orders(Id, ClientId, Date, TotalAmount, Status)
 OrderItems(Id, OrderId, ProductId, ProductName, Quantity, Price)
+OrderStatusHistory(Id, OrderId, Status, ChangedAt)
 Sessions(Id, ClientId, ClientName, PcId, ComputerName, StartTime, EndTime, TotalCost, TariffName, HourlyRate)
 Tariffs(Id, Name, CostPerHour, Description)
 ```

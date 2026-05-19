@@ -6,13 +6,15 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
 
 type App struct {
-	cfg Config
-	db  *sql.DB
+	cfg         Config
+	db          *sql.DB
+	authLimiter *RateLimiter
 }
 
 func New(cfg Config) (*App, error) {
@@ -25,7 +27,7 @@ func New(cfg Config) (*App, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	app := &App{cfg: cfg, db: db}
+	app := &App{cfg: cfg, db: db, authLimiter: NewRateLimiter(10, time.Minute)}
 	if err := app.migrate(); err != nil {
 		db.Close()
 		return nil, err

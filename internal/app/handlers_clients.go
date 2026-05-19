@@ -63,11 +63,14 @@ func (a *App) getClient(w http.ResponseWriter, r *http.Request) {
 func (a *App) createClient(w http.ResponseWriter, r *http.Request) {
 	var client Client
 	if err := decodeJSON(r, &client); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_JSON", "Некорректный JSON")
 		return
 	}
-	if err := requireText(client.Name, "name"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	client.Name = strings.TrimSpace(client.Name)
+	client.Phone = normalizePhone(client.Phone)
+	client.Email = strings.TrimSpace(client.Email)
+	if err := validateClientFields(client.Name, client.Phone, client.Email, false); err != nil {
+		writeValidationError(w, err)
 		return
 	}
 
@@ -77,7 +80,7 @@ func (a *App) createClient(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			writeError(w, http.StatusConflict, "phone already registered")
+			writeErrorCode(w, http.StatusConflict, "CLIENT_EXISTS", "Телефон или email уже зарегистрирован")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -112,18 +115,14 @@ func (a *App) updateClient(w http.ResponseWriter, r *http.Request) {
 func (a *App) updateClientProfile(w http.ResponseWriter, r *http.Request, id int64) {
 	var request ClientProfileRequest
 	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_JSON", "Некорректный JSON")
 		return
 	}
 	request.Name = strings.TrimSpace(request.Name)
-	request.Phone = strings.TrimSpace(request.Phone)
+	request.Phone = normalizePhone(request.Phone)
 	request.Email = strings.TrimSpace(request.Email)
-	if err := requireText(request.Name, "name"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := requireText(request.Phone, "phone"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := validateClientFields(request.Name, request.Phone, request.Email, false); err != nil {
+		writeValidationError(w, err)
 		return
 	}
 
@@ -133,7 +132,7 @@ func (a *App) updateClientProfile(w http.ResponseWriter, r *http.Request, id int
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			writeError(w, http.StatusConflict, "phone already registered")
+			writeErrorCode(w, http.StatusConflict, "CLIENT_EXISTS", "Телефон или email уже зарегистрирован")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -155,14 +154,14 @@ func (a *App) updateClientProfile(w http.ResponseWriter, r *http.Request, id int
 func (a *App) updateClientAsAdmin(w http.ResponseWriter, r *http.Request, id int64) {
 	var client Client
 	if err := decodeJSON(r, &client); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_JSON", "Некорректный JSON")
 		return
 	}
 	client.Name = strings.TrimSpace(client.Name)
-	client.Phone = strings.TrimSpace(client.Phone)
+	client.Phone = normalizePhone(client.Phone)
 	client.Email = strings.TrimSpace(client.Email)
-	if err := requireText(client.Name, "name"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := validateClientFields(client.Name, client.Phone, client.Email, false); err != nil {
+		writeValidationError(w, err)
 		return
 	}
 
@@ -172,7 +171,7 @@ func (a *App) updateClientAsAdmin(w http.ResponseWriter, r *http.Request, id int
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			writeError(w, http.StatusConflict, "phone already registered")
+			writeErrorCode(w, http.StatusConflict, "CLIENT_EXISTS", "Телефон или email уже зарегистрирован")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())

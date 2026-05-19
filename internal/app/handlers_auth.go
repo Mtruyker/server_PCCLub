@@ -36,6 +36,7 @@ type authClaims struct {
 
 type authError struct {
 	status  int
+	code    string
 	message string
 }
 
@@ -44,25 +45,26 @@ func (e authError) Error() string {
 }
 
 func (a *App) register(w http.ResponseWriter, r *http.Request) {
+	if !a.authLimiter.Allow(rateLimitKey(r, "register")) {
+		writeErrorCode(w, http.StatusTooManyRequests, "RATE_LIMITED", "Слишком много попыток регистрации")
+		return
+	}
+
 	var request AuthRequest
 	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_JSON", "Некорректный JSON")
 		return
 	}
 	request.Name = strings.TrimSpace(request.Name)
-	request.Phone = strings.TrimSpace(request.Phone)
+	request.Phone = normalizePhone(request.Phone)
 	request.Email = strings.TrimSpace(request.Email)
 
-	if err := requireText(request.Name, "name"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := validateClientFields(request.Name, request.Phone, request.Email, false); err != nil {
+		writeValidationError(w, err)
 		return
 	}
-	if err := requireText(request.Phone, "phone"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := requireText(request.Password, "password"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := validatePassword(request.Password); err != nil {
+		writeValidationError(w, err)
 		return
 	}
 
@@ -78,7 +80,7 @@ func (a *App) register(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			writeError(w, http.StatusConflict, "phone already registered")
+			writeErrorCode(w, http.StatusConflict, "PHONE_EXISTS", "Телефон уже зарегистрирован")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -95,18 +97,23 @@ func (a *App) register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
-	var request AuthRequest
-	if err := decodeJSON(r, &request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
+	if !a.authLimiter.Allow(rateLimitKey(r, "login")) {
+		writeErrorCode(w, http.StatusTooManyRequests, "RATE_LIMITED", "Слишком много попыток входа")
 		return
 	}
-	request.Phone = strings.TrimSpace(request.Phone)
+
+	var request AuthRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_JSON", "Некорректный JSON")
+		return
+	}
+	request.Phone = normalizePhone(request.Phone)
 	if err := requireText(request.Phone, "phone"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_PHONE", "Телефон обязателен")
 		return
 	}
 	if err := requireText(request.Password, "password"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_PASSWORD", "Пароль обязателен")
 		return
 	}
 
@@ -114,7 +121,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	var passwordHash sql.NullString
 	err := a.db.QueryRow(`SELECT Id, PasswordHash FROM Clients WHERE Phone = ?`, request.Phone).Scan(&clientID, &passwordHash)
 	if err == sql.ErrNoRows {
-		writeError(w, http.StatusUnauthorized, "invalid phone or password")
+		writeErrorCode(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Неверный телефон или пароль")
 		return
 	}
 	if err != nil {
@@ -122,7 +129,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !passwordHash.Valid || bcrypt.CompareHashAndPassword([]byte(passwordHash.String), []byte(request.Password)) != nil {
-		writeError(w, http.StatusUnauthorized, "invalid phone or password")
+		writeErrorCode(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Неверный телефон или пароль")
 		return
 	}
 
@@ -172,42 +179,42 @@ func (a *App) signToken(clientID int64, tokenType string, ttl time.Duration) (st
 func (a *App) parseAccessToken(r *http.Request) (int64, error) {
 	header := strings.TrimSpace(r.Header.Get("Authorization"))
 	if header == "" {
-		return 0, authError{status: http.StatusUnauthorized, message: "missing authorization header"}
+		return 0, authError{status: http.StatusUnauthorized, code: "AUTH_REQUIRED", message: "Требуется авторизация"}
 	}
 	const prefix = "Bearer "
 	if !strings.HasPrefix(header, prefix) {
-		return 0, authError{status: http.StatusUnauthorized, message: "invalid authorization header"}
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_AUTH_HEADER", message: "Некорректный заголовок авторизации"}
 	}
 
 	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return 0, authError{status: http.StatusUnauthorized, message: "invalid token"}
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN", message: "Некорректный токен"}
 	}
 
 	unsigned := parts[0] + "." + parts[1]
 	expected := signHMAC([]byte(a.cfg.JWTSecret), unsigned)
 	actual, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil || !hmac.Equal(actual, expected) {
-		return 0, authError{status: http.StatusUnauthorized, message: "invalid token"}
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN", message: "Некорректный токен"}
 	}
 
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return 0, authError{status: http.StatusUnauthorized, message: "invalid token"}
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN", message: "Некорректный токен"}
 	}
 	var claims authClaims
 	if err := json.Unmarshal(payload, &claims); err != nil {
-		return 0, authError{status: http.StatusUnauthorized, message: "invalid token"}
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN", message: "Некорректный токен"}
 	}
 	if claims.Type != "access" {
-		return 0, authError{status: http.StatusUnauthorized, message: "invalid token type"}
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN_TYPE", message: "Некорректный тип токена"}
 	}
 	if claims.Exp < time.Now().Unix() {
-		return 0, authError{status: http.StatusUnauthorized, message: "token expired"}
+		return 0, authError{status: http.StatusUnauthorized, code: "TOKEN_EXPIRED", message: "Срок действия токена истек"}
 	}
 	if claims.ClientID <= 0 {
-		return 0, authError{status: http.StatusUnauthorized, message: "invalid token"}
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN", message: "Некорректный токен"}
 	}
 	return claims.ClientID, nil
 }
@@ -218,9 +225,27 @@ func (a *App) requireClient(r *http.Request, expectedClientID int64) error {
 		return err
 	}
 	if clientID != expectedClientID {
-		return authError{status: http.StatusForbidden, message: "access denied"}
+		return authError{status: http.StatusForbidden, code: "ACCESS_DENIED", message: "Доступ запрещен"}
 	}
 	return nil
+}
+
+func (a *App) clientIDFromRequest(r *http.Request, requestedClientID int64) (int64, bool, error) {
+	if a.isAdminRequest(r) {
+		if requestedClientID <= 0 {
+			return 0, true, authError{status: http.StatusBadRequest, code: "CLIENT_ID_REQUIRED", message: "clientId обязателен"}
+		}
+		return requestedClientID, true, nil
+	}
+
+	clientID, err := a.parseAccessToken(r)
+	if err != nil {
+		return 0, false, err
+	}
+	if requestedClientID > 0 && requestedClientID != clientID {
+		return 0, false, authError{status: http.StatusForbidden, code: "CLIENT_ID_MISMATCH", message: "clientId не совпадает с токеном"}
+	}
+	return clientID, false, nil
 }
 
 func (a *App) requireClientOrAdmin(r *http.Request, expectedClientID int64) (bool, error) {
@@ -252,10 +277,22 @@ func (a *App) isAdminRequest(r *http.Request) bool {
 func writeAuthError(w http.ResponseWriter, err error) {
 	var authErr authError
 	if errors.As(err, &authErr) {
-		writeError(w, authErr.status, authErr.message)
+		code := authErr.code
+		if code == "" {
+			code = "AUTH_ERROR"
+		}
+		writeErrorCode(w, authErr.status, code, authErr.message)
 		return
 	}
 	writeError(w, http.StatusUnauthorized, err.Error())
+}
+
+func writeValidationError(w http.ResponseWriter, err error) {
+	if code, ok := validationCode(err); ok {
+		writeErrorCode(w, http.StatusBadRequest, code, err.Error())
+		return
+	}
+	writeError(w, http.StatusBadRequest, err.Error())
 }
 
 func signHMAC(secret []byte, value string) []byte {

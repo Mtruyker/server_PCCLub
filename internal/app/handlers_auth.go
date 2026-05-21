@@ -295,6 +295,67 @@ func writeValidationError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusBadRequest, err.Error())
 }
 
+func (a *App) refreshToken(w http.ResponseWriter, r *http.Request) {
+	if !a.authLimiter.Allow(rateLimitKey(r, "refresh")) {
+		writeErrorCode(w, http.StatusTooManyRequests, "RATE_LIMITED", "Слишком много попыток обновления токена")
+		return
+	}
+
+	var request struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_JSON", "Некорректный JSON")
+		return
+	}
+
+	clientID, err := a.parseRefreshToken(request.RefreshToken)
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	response, err := a.authResponse(clientID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (a *App) parseRefreshToken(token string) (int64, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN", message: "Некорректный токен"}
+	}
+
+	unsigned := parts[0] + "." + parts[1]
+	expected := signHMAC([]byte(a.cfg.JWTSecret), unsigned)
+	actual, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || !hmac.Equal(actual, expected) {
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN", message: "Некорректный токен"}
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN", message: "Некорректный токен"}
+	}
+	var claims authClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN", message: "Некорректный токен"}
+	}
+	if claims.Type != "refresh" {
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN_TYPE", message: "Некорректный тип токена"}
+	}
+	if claims.Exp < time.Now().Unix() {
+		return 0, authError{status: http.StatusUnauthorized, code: "TOKEN_EXPIRED", message: "Срок действия токена истек"}
+	}
+	if claims.ClientID <= 0 {
+		return 0, authError{status: http.StatusUnauthorized, code: "INVALID_TOKEN", message: "Некорректный токен"}
+	}
+	return claims.ClientID, nil
+}
+
 func signHMAC(secret []byte, value string) []byte {
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte(value))

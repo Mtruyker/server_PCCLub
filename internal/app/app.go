@@ -27,6 +27,18 @@ func New(cfg Config) (*App, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
+	// Configure database connection pool for better performance
+	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetMaxIdleConns(cfg.MaxIdleConns)
+	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+
+	// Test database connection
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping database: %w", err)
+	}
+
 	app := &App{cfg: cfg, db: db, authLimiter: NewRateLimiter(10, time.Minute)}
 	if err := app.migrate(); err != nil {
 		db.Close()
@@ -51,6 +63,29 @@ func (a *App) Routes() http.Handler {
 	mux := NewRouter()
 
 	mux.HandleFunc("GET /health", a.health)
+
+	// V1 API routes for mobile app compatibility
+	mux.HandleFunc("POST /api/v1/auth/register", a.register)
+	mux.HandleFunc("POST /api/v1/auth/login", a.login)
+	mux.HandleFunc("POST /api/v1/auth/refresh", a.refreshToken)
+
+	mux.HandleFunc("GET /api/v1/profile", a.getCurrentUser)
+	mux.HandleFunc("PUT /api/v1/profile", a.updateCurrentUser)
+	mux.HandleFunc("GET /api/v1/clients/{id}/sessions", a.listClientSessions)
+	mux.HandleFunc("GET /api/v1/clients/{id}/bookings", a.listClientBookings)
+	mux.HandleFunc("GET /api/v1/clients/{id}/orders", a.listClientOrders)
+
+	mux.HandleFunc("GET /api/v1/pcs", a.listComputers)
+	mux.HandleFunc("GET /api/v1/pcs/available", a.listAvailableComputers)
+	mux.HandleFunc("POST /api/v1/bookings", a.createBooking)
+	mux.HandleFunc("DELETE /api/v1/bookings/{id}", a.cancelBooking)
+
+	mux.HandleFunc("GET /api/v1/catalog", a.listItems)
+	mux.HandleFunc("POST /api/v1/orders", a.createOrder)
+
+	mux.HandleFunc("GET /api/v1/news", a.listNews)
+
+	// Legacy API routes (keep for backward compatibility)
 	mux.HandleFunc("POST /api/auth/register", a.register)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 
@@ -89,7 +124,14 @@ func (a *App) Routes() http.Handler {
 
 	mux.HandleFunc("GET /api/statistics", a.statistics)
 
-	return cors(mux)
+	// Apply middleware chain
+	handler := cors(mux)
+	handler = securityHeadersMiddleware(handler)
+	handler = loggingMiddleware(handler)
+	handler = recoveryMiddleware(handler)
+	handler = timeoutMiddleware(30 * time.Second)(handler)
+
+	return handler
 }
 
 func (a *App) health(w http.ResponseWriter, _ *http.Request) {

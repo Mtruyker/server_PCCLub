@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(timeout 10s ./server.exe)",
+      "Bash(docker-compose build *)"
+    ]
+  }
+}

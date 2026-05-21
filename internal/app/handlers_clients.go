@@ -249,6 +249,35 @@ func (a *App) deleteClient(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *App) getCurrentUser(w http.ResponseWriter, r *http.Request) {
+	clientID, err := a.parseAccessToken(r)
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	client, err := a.findClientByID(clientID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			writeError(w, http.StatusNotFound, "client not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, client)
+}
+
+func (a *App) updateCurrentUser(w http.ResponseWriter, r *http.Request) {
+	clientID, err := a.parseAccessToken(r)
+	if err != nil {
+		writeAuthError(w, err)
+		return
+	}
+
+	a.updateClientProfile(w, r, clientID)
+}
+
 func (a *App) findClientByID(id int64) (Client, error) {
 	var client Client
 	err := a.db.QueryRow(`SELECT Id, Name, COALESCE(Phone, ''), COALESCE(Email, ''), Balance FROM Clients WHERE Id = ?`, id).
